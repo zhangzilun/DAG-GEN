@@ -20,7 +20,6 @@ from models import FewShotStyleEncoder, StructureToGraphDecoder5
 import infer_fewshot_structure1_ratio_v2 as INF
 
 
-# ---------------- TimeHead (MUST match training) ----------------
 class TimeHead(nn.Module):
     def __init__(self, d_style: int, lp_bins: int = 8, hidden: int = 256):
         super().__init__()
@@ -47,7 +46,6 @@ def pool_style(z: torch.Tensor) -> torch.Tensor:
     return z
 
 
-# ---------------- time feature builder on GENERATED graph ----------------
 def widths_to_layer_ids(widths: List[int]) -> List[int]:
     layer_ids = []
     for li, w in enumerate(widths):
@@ -170,7 +168,7 @@ def attach_time_labels(
     import networkx as nx
     import torch
 
-    # === build edge features (你原来已有的那部分保持不变) ===
+    # === build edge features  ===
     e_feat, edges = build_edge_feat_from_generated(A, widths, lp_bins)
     if e_feat.numel() == 0:
         return
@@ -183,7 +181,6 @@ def attach_time_labels(
         y_hat = time_head(z_rep, e_feat)
         y = torch.expm1(y_hat).clamp_min(1.0).cpu().numpy().astype(np.float32)
 
-    # === compute LP ===
     N = int(A.shape[0])
     Gtmp = nx.DiGraph()
     Gtmp.add_nodes_from(range(N))
@@ -199,7 +196,7 @@ def attach_time_labels(
                 dp[v] = nv
     lp = max(dp.values()) if dp else 0.0
 
-    # === B 方案：软校准 ===
+    
     eps = 1e-6
     if lp > eps:
         if lp < lp_min:
@@ -216,7 +213,6 @@ def attach_time_labels(
             G.edges[u, v][label_key] = float(t)
 
 
-# ---------------- ckpt loaders ----------------
 def load_structure_ckpt(ckpt_struct: Path) -> Tuple[Any, Any, Dict[str, Any]]:
     enc, dec, meta = INF.load_fewshot_ckpt(ckpt_struct)
     return enc, dec, meta
@@ -266,7 +262,6 @@ def load_time_head_ckpt(
     return encoder, decoder, time_head, meta
 
 
-# ---------------- save helpers ----------------
 def save_graph_gpickle_json(G: nx.DiGraph, out_dir: Path, base: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     p_gpk = out_dir / f"{base}.gpickle"
@@ -301,7 +296,7 @@ def calibrate_lp_min_for_bucket(
     best_topk_scale,
     args,
     seed,
-    q=0.20,   # 用 p20 当下限（你可改 0.10/0.15/0.25）
+    q=0.20,   
 ):
     import numpy as np
     import random
@@ -309,7 +304,7 @@ def calibrate_lp_min_for_bucket(
     rng = random.Random(int(seed) + 7777 * int(bi))
     lp_list = []
 
-    # 暂时关闭抬底：只看 raw LP
+    
     for _ in range(int(calib_n)):
         pick = rng.sample(pool, int(k_shot) + 1)
         sup_idx = pick[: int(k_shot)]
@@ -318,7 +313,7 @@ def calibrate_lp_min_for_bucket(
         sup_graphs = [INF.read_graph_any(files[i]) for i in sup_idx]
         ref_graph = INF.read_graph_any(files[ref_idx])
 
-        # 用你原本 ratio_v2 的流程采样结构（严格合法）
+       
         out = INF.generate_one_strict(
             encoder=encoder,
             decoder=decoder,
@@ -341,7 +336,6 @@ def calibrate_lp_min_for_bucket(
         widths = out["widths"]    # list[int]
         z = out["z_style"]        # [1,d]
 
-        # 预测一次 raw y 并计算 LP（不做 lp_min/tmax 缩放）
         lp_raw = predict_lp_raw_only(
             G=Ggen,
             A=A_np,
@@ -372,7 +366,6 @@ def calibrate_lp_min_for_bucket(
 
 
 
-# ---------------- main ----------------
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_dir", type=str, default=r"..\data\gpickle2")
@@ -404,7 +397,7 @@ def main() -> None:
 
     ap.add_argument("--config", type=str, default="", help="path to json config (optional)")
 
-    # ---------- config loading (optional) ----------
+    -
     def _load_json(p: str) -> Dict[str, Any]:
         with open(p, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -438,8 +431,6 @@ def main() -> None:
     # dump final resolved config for reproducibility
     # NOTE: out_dir may come from cfg
     _dump_resolved(Path(getattr(args, "out_dir")), args)
-    # ----------------------------------------------
-
 
 
     random.seed(args.seed)
@@ -584,9 +575,7 @@ def main() -> None:
             lp_arr = np.asarray(lp_list, dtype=np.float32)
             lp_min_bucket = float(np.quantile(lp_arr, lp_q))
             print(f"[LP-CALIB] n={len(lp_list)} q={lp_q:.2f} lp_min_bucket={lp_min_bucket:.2f} p50={float(np.quantile(lp_arr,0.5)):.2f} p90={float(np.quantile(lp_arr,0.9)):.2f} max={float(lp_arr.max()):.2f}")
-        # ---------------------------------------------------------------------
-
-        # ---------------------------------------------------------------------
+       
 
         best_temp = calib.get("best_temp", None)
         if best_temp is None:
@@ -701,3 +690,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
