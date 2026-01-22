@@ -1,4 +1,6 @@
 # how to run
+
 python infer_fewshot_structure1_ratio_v2_timehead.py--config exp_lp300_fewshot10_timehead.json
 doing this experiment
 
+### 
