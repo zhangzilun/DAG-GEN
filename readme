@@ -1,6 +1,8 @@
-# how to run
-
+How to run:
 python infer_fewshot_structure1_ratio_v2_timehead.py--config exp_lp300_fewshot10_timehead.json
 doing this experiment
 
-### 
+Test:
+use 10 DAG sample to change in "test10" (if need)
+python visualize_taskset.py
+to get new DAG
