@@ -20,14 +20,14 @@ SAVE_EVERY = 0  # >0 to save periodic ckpts
 # ===== Loss weights (structure-only) =====
 W_BCE = 1.0
 
-# 结构项：建议先从“能收敛”开始，不要太大
+
 W_DEG_COV = 0.05
 W_SRC_SINK_SOFT = 0.02
 
-# 这两个先关掉（你现在阶段先稳定结构）
 W_DAG = 0.0
 W_LONGEST = 0.05
 
 # soft source/sink params
 SRC_SINK_TAU = 0.1
 SRC_SINK_K = 10.0
+
