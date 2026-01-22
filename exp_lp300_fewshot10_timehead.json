@@ -1,6 +1,6 @@
 {
   "data_dir": "../src/gpickle2_lp300",   # change your data
-  "ckpt_time": "checkpoints_time_head_lp300/time_head_best.pt",
+  "ckpt_time": "checkpoints/best.pt",
   "k_shot": 10,
   "calib_n": 600,
   "temps": [0.10, 0.12, 0.15, 0.18, 0.20, 0.25, 0.30],
@@ -18,4 +18,5 @@
   "seed": 42,
   "out_dir": "exp_ratio_v2_timehead_lp300_tmax299999"
 }
+
 
