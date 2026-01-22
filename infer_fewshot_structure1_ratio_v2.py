@@ -1,4 +1,4 @@
-# infer_fewshot_structure1.py  -- FULL REPLACE VERSION (per-bucket temp×thr grid search)
+# infer_fewshot_structure1_ratio_v2.py  -- FULL REPLACE VERSION (per-bucket temp×thr grid search)
 # Goal: Calibrate (temp,thr) per bucket to minimize density error under strict-valid constraint,
 #       WITHOUT any post-fix (no add/remove edges). We only choose temp and threshold.
 #
