@@ -14,11 +14,6 @@
 #   --svec_mode no_E_T ^
 #   --save_valid 1 --out_dir infer_fewshot_v3_calib_grid_out
 #
-# Notes:
-# - strict valid = DAG + exactly 1 source + exactly 1 sink + no isolated nodes
-# - density is computed in "mask-space": only positions allowed by decoder finite mask
-# - This script assumes your ckpt contains encoder/decoder (few-shot freeze style).
-#
 from __future__ import annotations
 
 import argparse
@@ -45,7 +40,6 @@ from models import FewShotStyleEncoder, StructureToGraphDecoder5
 from utils import topological_layers
 
 
-# ---------------- IO ----------------
 def load_graph_files(data_dir: Path) -> List[Path]:
     data_dir = Path(data_dir)
     if data_dir.is_file():
@@ -81,7 +75,6 @@ def bucket_name(bi: int) -> str:
     return BUCKETS[bi][0] if 0 <= bi < len(BUCKETS) else f"B{bi}"
 
 
-# ---------------- stable node ordering ----------------
 _num_re = re.compile(r"(\d+)$")
 
 
@@ -206,7 +199,6 @@ def mask_svec(s_vec: torch.Tensor, mode: str = "no_E_T") -> torch.Tensor:
     return x
 
 
-# ---------------- validity / density in mask-space ----------------
 def build_graph_from_adj(A: np.ndarray) -> nx.DiGraph:
     N = int(A.shape[0])
     G = nx.DiGraph()
@@ -356,7 +348,6 @@ def dens_in_mask_space_from_target(A_tgt: torch.Tensor, valid_mask: torch.Tensor
     return dens, allowed
 
 
-# ---------------- dataset indexing ----------------
 def index_files_by_bucket(files: List[Path]) -> Dict[int, List[int]]:
     bucket_to_idx: Dict[int, List[int]] = {i: [] for i in range(len(BUCKETS))}
     for i, p in enumerate(files):
@@ -382,7 +373,6 @@ def print_bucket_counts(bucket_to_idx: Dict[int, List[int]]) -> None:
     print("====================================================\n")
 
 
-# ---------------- few-shot support sampling ----------------
 def sample_k_support(
     bucket_to_idx: Dict[int, List[int]],
     files: List[Path],
@@ -451,7 +441,6 @@ def topk_adj_from_prob(prob: torch.Tensor, valid_mask: torch.Tensor, k: int, add
     scores = prob[valid_mask]  # [M]
     scores = torch.clamp(scores, 1e-6, 1 - 1e-6)
 
-    # optional gumbel noise (for randomness while keeping budget)
     if add_gumbel and add_gumbel > 0:
         g = torch.Generator(device=scores.device)
         g.manual_seed(int(seed))
@@ -459,7 +448,7 @@ def topk_adj_from_prob(prob: torch.Tensor, valid_mask: torch.Tensor, k: int, add
         gumbel = -torch.log(-torch.log(torch.clamp(u, 1e-6, 1 - 1e-6)))
         scores = scores + float(add_gumbel) * gumbel
 
-    # top-k
+ 
     topk = torch.topk(scores, k=k, largest=True)
     chosen = idx[topk.indices]  # [k,2]
     ii = chosen[:, 0].detach().cpu().numpy()
@@ -472,8 +461,6 @@ def k_from_ref_dens(mean_ref_dens: float, allowed_edges: float) -> int:
     # allowed_edges = valid_mask.sum()
     return int(round(float(mean_ref_dens) * float(allowed_edges)))
 
-
-# ---------------- load ckpt ----------------
 def load_fewshot_ckpt(ckpt_path: Path) -> Tuple[FewShotStyleEncoder, StructureToGraphDecoder5, Dict[str, Any]]:
     ckpt = torch.load(ckpt_path, map_location=DEVICE)
     if not isinstance(ckpt, dict):
@@ -674,7 +661,6 @@ def coverage_topk_adj_from_prob(
         A[ii, jj] = 1
         chosen_set.add((ii, jj))
 
-    # (1) coverage-in
     for j in range(N):
         lj = int(layer_ids[j])
         if lj <= 0:
@@ -689,7 +675,7 @@ def coverage_topk_adj_from_prob(
         if (i_best, j) not in chosen_set:
             _choose(i_best, j)
 
-    # (2) coverage-out
+
     for i in range(N):
         li = int(layer_ids[i])
         if li >= L - 1:
@@ -704,7 +690,6 @@ def coverage_topk_adj_from_prob(
         if (i, j_best) not in chosen_set:
             _choose(i, j_best)
 
-    # (3) fill to k_total with split-quota top-k
     k_total = int(max(0, min(int(k_total), M)))
     already = int(A.sum().item())
     if already >= k_total:
@@ -732,11 +717,9 @@ def coverage_topk_adj_from_prob(
     dstL_rem = layer_ids_t[dst_rem]
     span_rem = (dstL_rem - srcL_rem)
 
-    # split: neighbor span==1 vs skip span>=2
     neigh_mask = (span_rem == 1)
     skip_mask = (span_rem >= 2)
 
-    # compute quota
     tsf = float(max(0.0, min(1.0, target_skip_frac)))
     k_skip = int(round(remain * tsf))
     k_neigh = remain - k_skip
@@ -773,7 +756,6 @@ def coverage_topk_adj_from_prob(
     return A.detach().cpu().numpy()
 
 
-# ---------------- calibration: per-bucket grid search ----------------
 @torch.no_grad()
 def calibrate_bucket_temp_thr(
     encoder: torch.nn.Module,
@@ -856,8 +838,6 @@ def calibrate_bucket_temp_thr(
 
             dens_ref, _ = dens_in_mask_space_from_target(A_tgt, valid_mask)
 
-            # Route-1: derive per-graph skip-edge target from reference span distribution
-            # span_hist bins: [1,2,3,4,5+]
             Aref_bin = (A_tgt > 0.5).float()
             ref_stats = graph_dist_stats_from_adj(Aref_bin, layer_ids)
             ref_span = ref_stats["span_hist"]  # [span1, span2, span3, span4, span5+]
@@ -963,7 +943,6 @@ def calibrate_bucket_temp_thr(
     }
 
 
-
 @torch.no_grad()
 def generate_bucket(
     encoder: torch.nn.Module,
@@ -985,14 +964,7 @@ def generate_bucket(
     topk_gumbel: float = 0.0,
     allow_skip: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Same behavior as your current version, plus:
-      - when save_valid=1: ALSO save .gpickle + node-link .json next to the .png
-        so later scripts (add time) can load real graphs.
-    Notes:
-      - gpickle write uses pickle.dump (robust across networkx versions)
-      - json is node-link format (json_graph.node_link_data)
-    """
+   
     import pickle, json
     from networkx.readwrite import json_graph
 
@@ -1055,8 +1027,7 @@ def generate_bucket(
         prob, valid_mask = logits_to_prob_and_mask(A_logits, temperature=float(temp))
         dens_gt, allowed = dens_in_mask_space_from_target(A_tgt, valid_mask)
 
-        # Route-1: derive per-graph skip-edge target from reference span distribution
-        # span_hist bins: [1,2,3,4,5+]
+
         Aref_bin = (A_tgt > 0.5).float()
         ref_stats = graph_dist_stats_from_adj(Aref_bin, layer_ids)
         span_hist = ref_stats.get("span_hist", [])
@@ -1122,7 +1093,6 @@ def generate_bucket(
             tag = f"thr={thr:.2f}" if pick == "thr" else f"topk_scale={topk_scale:.2f}"
             stem = f"valid_{valid:04d}_N{A.shape[0]}_E{int(A_bin.sum())}_dens{dens:.3f}"
 
-            # (A) save png adjacency image
             fig = plt.figure(figsize=(4, 4))
             plt.imshow(A_bin.detach().cpu().numpy(), interpolation="nearest")
             plt.title(f"{bucket_name(bi)} temp={temp:.2f} {tag}\nN={A.shape[0]} E={int(A_bin.sum())} dens={dens:.3f}")
@@ -1131,16 +1101,13 @@ def generate_bucket(
             fig.savefig(out_bucket_dir / f"{stem}.png", dpi=160)
             plt.close(fig)
 
-            # (B) save gpickle graph object (robust)
             with open(out_bucket_dir / f"{stem}.gpickle", "wb") as f:
                 pickle.dump(G, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-            # (C) save node-link json (so other tools can read)
             data = json_graph.node_link_data(G, edges="links")
             with open(out_bucket_dir / f"{stem}.json", "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, default=_json_default)
 
-    # dump distribution json for this bucket (still in bucket root)
     dist_path = out_dir / f"{bucket_name(bi)}_dist_ref_gen.json"
     with open(dist_path, "w", encoding="utf-8") as f:
         json.dump({"bucket": bucket_name(bi), "ref": ref_dist_list, "gen": gen_dist_list}, f, ensure_ascii=False, indent=2)
@@ -1229,7 +1196,6 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) per-bucket calibration
     print("========== Per-bucket calibration ==========")
     calib_report: Dict[str, Any] = {"meta": meta, "args": vars(args), "per_bucket": {}}
     chosen: Dict[int, Tuple[float, float]] = {}
@@ -1273,7 +1239,6 @@ def main() -> None:
         json.dump(calib_report, f, ensure_ascii=False, indent=2)
     print(f"[OK] Saved calibration report: {calib_path}\n")
 
-    # 2) generation
     all_stats: Dict[str, Any] = {"meta": meta, "args": vars(args), "per_bucket": {}}
 
     for bi in range(len(BUCKETS)):
