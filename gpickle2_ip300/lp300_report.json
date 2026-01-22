@@ -1,0 +1,125 @@
+{
+  "ref_dir": "E:\\DAG-GNN\\data\\gpickle2",
+  "out_dir": "E:\\DAG-GNN\\data\\gpickle2_lp300",
+  "tmax": 299.99800000000005,
+  "src_time_keys": [
+    "critical_time",
+    "time",
+    "C",
+    "label"
+  ],
+  "dst_key": "label_300",
+  "min_edge_time": 1.0,
+  "strict": true,
+  "final_floor": false,
+  "counts": {
+    "total_seen": 800,
+    "saved": 800,
+    "skip_non_dag": 0,
+    "skip_zero_lp": 0
+  },
+  "lp_before": {
+    "n": 800,
+    "mean": 2679.42625,
+    "std": 765.9562305125127,
+    "min": 1170.0,
+    "p10": 1999.0,
+    "p50": 2540.5,
+    "p90": 3483.8,
+    "p99": 5437.33,
+    "max": 8337.0
+  },
+  "lp_after": {
+    "n": 800,
+    "mean": 299.99800000000005,
+    "std": 2.718696587991899e-14,
+    "min": 299.99799999999993,
+    "p10": 299.998,
+    "p50": 299.99800000000005,
+    "p90": 299.99800000000005,
+    "p99": 299.99800000000005,
+    "max": 299.99800000000016
+  },
+  "preview": [
+    {
+      "in": "..\\data\\gpickle2\\Tau_0.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_0.gpickle",
+      "lp_before": 1628.0,
+      "lp_after": 299.99800000000005,
+      "E": 85,
+      "N": 46
+    },
+    {
+      "in": "..\\data\\gpickle2\\Tau_1.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_1.gpickle",
+      "lp_before": 2054.0,
+      "lp_after": 299.998,
+      "E": 130,
+      "N": 61
+    },
+    {
+      "in": "..\\data\\gpickle2\\Tau_10.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_10.gpickle",
+      "lp_before": 2949.0,
+      "lp_after": 299.99800000000005,
+      "E": 77,
+      "N": 42
+    },
+    {
+      "in": "..\\data\\gpickle2\\Tau_100.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_100.gpickle",
+      "lp_before": 2537.0,
+      "lp_after": 299.99800000000005,
+      "E": 83,
+      "N": 42
+    },
+    {
+      "in": "..\\data\\gpickle2\\Tau_101.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_101.gpickle",
+      "lp_before": 2223.0,
+      "lp_after": 299.99800000000005,
+      "E": 163,
+      "N": 60
+    },
+    {
+      "in": "..\\data\\gpickle2\\Tau_102.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_102.gpickle",
+      "lp_before": 2964.0,
+      "lp_after": 299.99800000000005,
+      "E": 62,
+      "N": 33
+    },
+    {
+      "in": "..\\data\\gpickle2\\Tau_103.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_103.gpickle",
+      "lp_before": 2627.0,
+      "lp_after": 299.99800000000005,
+      "E": 172,
+      "N": 72
+    },
+    {
+      "in": "..\\data\\gpickle2\\Tau_104.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_104.gpickle",
+      "lp_before": 2669.0,
+      "lp_after": 299.99800000000005,
+      "E": 101,
+      "N": 46
+    },
+    {
+      "in": "..\\data\\gpickle2\\Tau_105.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_105.gpickle",
+      "lp_before": 2009.0,
+      "lp_after": 299.99800000000005,
+      "E": 114,
+      "N": 36
+    },
+    {
+      "in": "..\\data\\gpickle2\\Tau_106.gpickle",
+      "out": "..\\data\\gpickle2_lp300\\Tau_106.gpickle",
+      "lp_before": 1843.0,
+      "lp_after": 299.998,
+      "E": 142,
+      "N": 54
+    }
+  ]
+}
