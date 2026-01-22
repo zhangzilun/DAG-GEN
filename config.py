@@ -45,4 +45,10 @@ SRC_SINK_K = 10.0
 # === Device ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+BUCKETS = [
+    ("B1_L_2_3", 2, 3),
+    ("B2_L_4_5", 4, 5),
+    ("B3_L_6_7", 6, 7),
+    ("B4_L_8_plus", 8, 10**9),
+]
 
