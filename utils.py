@@ -10,16 +10,8 @@ import torch
 import os
 
 
-# ------------------------------------------------------------
-#  DAG 层次化 & 拓扑工具
-# ------------------------------------------------------------
 def topological_layers(G: nx.DiGraph) -> List[List]:
-    """
-    按拓扑排序把 DAG 分成多层：
-        第一层：没有入边的点
-        后面每一层：入边都来自前面层的点
-    如果有环会直接抛异常。
-    """
+    
     if not nx.is_directed_acyclic_graph(G):
         raise ValueError("Input graph is not a DAG (cycle detected).")
 
@@ -41,11 +33,7 @@ def topological_layers(G: nx.DiGraph) -> List[List]:
 
 
 def build_order_from_widths(widths):
-    """
-    Build node order from per-layer widths.
-    Robust to torch tensors / floats.
-    """
-    # --- coerce widths to python list[int] ---
+    
     try:
         if hasattr(widths, "detach"):
             widths = widths.detach().cpu()
@@ -73,11 +61,9 @@ def build_order_from_widths(widths):
 
 
 def distribute_nodes_across_layers(total_nodes: int, num_layers: int) -> List[int]:
-    """
-    给定节点数和层数，把节点平均分配到各层，至少每层 1 个。
-    """
+   
     num_layers = max(2, int(num_layers))
-    total_nodes = max(num_layers, int(total_nodes))  # 至少每层 1 个
+    total_nodes = max(num_layers, int(total_nodes))  
 
     base = total_nodes // num_layers
     rem = total_nodes % num_layers
@@ -86,21 +72,19 @@ def distribute_nodes_across_layers(total_nodes: int, num_layers: int) -> List[in
     for i in range(rem):
         widths[i] += 1
 
-    # 保证不会出现 0
+    
     widths = [max(1, w) for w in widths]
     return widths
 
 
 def mask_allowed_pairs(widths: List[int]) -> np.ndarray:
-    """
-    返回 NxN 的 mask，1 表示允许的边 (前一层 -> 后一层)，否则 0。
-    """
+    
     order = build_order_from_widths(widths)
     N = len(order)
     mask = np.zeros((N, N), dtype=np.float32)
     for i, (li, _pi) in enumerate(order):
         for j, (lj, _pj) in enumerate(order):
-            if lj > li:  # 只能连到更靠后的层
+            if lj > li:  
                 mask[i, j] = 1.0
     return mask
 
@@ -109,24 +93,17 @@ def to_tensor(x: np.ndarray, device: torch.device) -> torch.Tensor:
     return torch.from_numpy(x).to(device)
 
 
-# ------------------------------------------------------------
-#  从矩阵计算最长路径时间（用于 loss / 评估）
-# ------------------------------------------------------------
+
 def longest_path_time_from_mats(
     A: np.ndarray,
     T: np.ndarray,
     widths: List[int],
 ) -> float:
-    """
-    给定邻接矩阵 A (0/1) 和时间矩阵 T，假设节点顺序已经按照
-    build_order_from_widths(widths) 排好（也就是拓扑顺序）。
-    返回整张图的最长路径时间。
-    """
+    
     N = A.shape[0]
     if N == 0:
         return 0.0
 
-    # 简单 DP：拓扑顺序就是 0..N-1
     dp = np.zeros(N, dtype=np.float32)
     for i in range(N):
         for j in range(N):
@@ -136,9 +113,6 @@ def longest_path_time_from_mats(
                     dp[j] = cand
     return float(dp.max())
 
-# ------------------------------------------------------------
-#  Checkpoint utilities (for training / finetuning)
-# ------------------------------------------------------------
 
 
 def save_checkpoint(
@@ -185,12 +159,12 @@ def load_checkpoint(
     """
     ckpt = torch.load(ckpt_path, map_location=device)
 
-    # -------- detect format --------
+    
     if "models" in ckpt:
-        # new format (v4.1+)
+        
         model_states = ckpt["models"]
     else:
-        # old format (v3 / v4)
+        
         model_states = ckpt
 
     for name, model in model_dict.items():
@@ -206,3 +180,4 @@ def load_checkpoint(
     best_loss = ckpt.get("best_loss", float("inf"))
 
     return start_epoch, best_loss
+
