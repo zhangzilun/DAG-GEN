@@ -34,8 +34,7 @@ import torch.nn.functional as F
 
 import matplotlib.pyplot as plt
 
-from config import DATA_DIR, DEVICE
-from config_structure1 import BUCKETS
+from config import DATA_DIR, DEVICE, BUCKETS
 from models import FewShotStyleEncoder, StructureToGraphDecoder5
 from utils import topological_layers
 
@@ -241,7 +240,7 @@ def logits_to_prob_and_mask(A_logits: torch.Tensor, temperature: float) -> Tuple
 
  
     try:
-        import config_structure1 as cfg
+        import config as cfg
         logit_temp = float(getattr(cfg, "LOGIT_TEMPERATURE", 6.0))
     except Exception:
         logit_temp = 6.0
