@@ -63,7 +63,6 @@ def read_graph_any(p: Path) -> nx.DiGraph:
     return G
 
 
-# ---------------- bucketing ----------------
 def bucket_id_for_L(L: int) -> int:
     for bi, (_name, lo, hi) in enumerate(BUCKETS):
         if lo <= L <= hi:
@@ -162,7 +161,6 @@ def pad_stack_graph_feats(X_list: List[torch.Tensor]) -> Tuple[torch.Tensor, tor
 
 
 def graph_to_svec(G: nx.DiGraph) -> torch.Tensor:
-    # normalization from your project config
     from config import NORM_N, NORM_E, NORM_L, NORM_W, NORM_T
 
     widths = graph_to_widths(G)
@@ -170,7 +168,7 @@ def graph_to_svec(G: nx.DiGraph) -> torch.Tensor:
     E = int(G.number_of_edges())
     L = int(len(widths))
     W = int(max(widths)) if widths else 0
-    total_T = 0.0  # structure-only
+    total_T = 0.0 
     return torch.tensor(
         [N / NORM_N, E / NORM_E, L / NORM_L, W / NORM_W, total_T / max(1e-9, NORM_T)],
         dtype=torch.float32,
@@ -178,9 +176,7 @@ def graph_to_svec(G: nx.DiGraph) -> torch.Tensor:
 
 
 def mask_svec(s_vec: torch.Tensor, mode: str = "no_E_T") -> torch.Tensor:
-    """
-    s_vec = [N,E,L,W,T] (normalized)
-    """
+    
     x = s_vec.clone()
     if x.dim() == 2 and x.size(0) == 1:
         x = x.squeeze(0)
@@ -243,8 +239,7 @@ def logits_to_prob_and_mask(A_logits: torch.Tensor, temperature: float) -> Tuple
 
     x = torch.nan_to_num(A_logits, nan=0.0, posinf=10.0, neginf=-10.0)
 
-    # Keep consistent with your training/infer scaling (project has LOGIT_TEMPERATURE often).
-    # If not exists, default 6.0.
+ 
     try:
         import config_structure1 as cfg
         logit_temp = float(getattr(cfg, "LOGIT_TEMPERATURE", 6.0))
@@ -261,7 +256,6 @@ def logits_to_prob_and_mask(A_logits: torch.Tensor, temperature: float) -> Tuple
     return prob, valid_mask
 
 def _hist_int(values, bins):
-    # bins: list of (lo, hi) inclusive, last can be (k, 10**9)
     h = [0] * len(bins)
     for v in values:
         for i, (lo, hi) in enumerate(bins):
@@ -280,16 +274,13 @@ def graph_dist_stats_from_adj(A_bin: torch.Tensor, layer_ids: list[int]) -> dict
     returns: distribution-like stats (histograms + key scalars)
     """
     N = int(A_bin.size(0))
-    # degrees
     in_deg = A_bin.sum(dim=0).to(torch.int64).tolist()
     out_deg = A_bin.sum(dim=1).to(torch.int64).tolist()
 
-    # degree hist bins: 0,1,2,3,4,5+
     deg_bins = [(0,0),(1,1),(2,2),(3,3),(4,4),(5,10**9)]
     in_hist = _hist_int(in_deg, deg_bins)
     out_hist = _hist_int(out_deg, deg_bins)
 
-    # edge span hist: span=1,2,3,4,5+
     ii, jj = torch.nonzero(A_bin > 0.5, as_tuple=True)
     spans = []
     for i, j in zip(ii.tolist(), jj.tolist()):
@@ -297,16 +288,14 @@ def graph_dist_stats_from_adj(A_bin: torch.Tensor, layer_ids: list[int]) -> dict
     span_bins = [(1,1),(2,2),(3,3),(4,4),(5,10**9)]
     span_hist = _hist_int(spans, span_bins)
 
-    # widths dist
+
     L = int(max(layer_ids) + 1) if layer_ids else 0
     widths = [0] * max(1, L)
     for li in layer_ids:
         widths[int(li)] += 1
-    # width bins: 1-2,3-4,5-6,7-8,9+
     width_bins = [(1,2),(3,4),(5,6),(7,8),(9,10**9)]
     width_hist = _hist_int(widths, width_bins)
 
-    # layer-pair ratio vector (already in your code)
     v_lp, neigh_ratio = layer_pair_ratios_from_adj(A_bin, layer_ids=layer_ids, L=L)
 
     return {
@@ -319,7 +308,7 @@ def graph_dist_stats_from_adj(A_bin: torch.Tensor, layer_ids: list[int]) -> dict
         "out_deg_hist": out_hist,
         "span_hist": span_hist,
         "neighbor_ratio": float(neigh_ratio),
-        "layerpair_vec": v_lp.detach().cpu().tolist(),  # length L*L
+        "layerpair_vec": v_lp.detach().cpu().tolist(),  
     }
 
 
@@ -404,21 +393,14 @@ def encode_style(encoder: torch.nn.Module, X_list: List[torch.Tensor]) -> torch.
     X = X.to(DEVICE)
     M = M.to(DEVICE)
     z = encoder(X, M)
-    # robust aggregation to [d]
     if isinstance(z, torch.Tensor) and z.dim() >= 2:
         z = z.mean(dim=tuple(range(z.dim() - 1))).view(-1)
     else:
         z = z.view(-1)
     return z
 
-#Top-K
 def topk_adj_from_prob(prob: torch.Tensor, valid_mask: torch.Tensor, k: int, add_gumbel: float = 0.0, seed: int = 0) -> np.ndarray:
-    """
-    prob: [N,N] in [0,1]
-    valid_mask: [N,N] bool (allowed edges)
-    k: number of edges to select in mask-space
-    add_gumbel: >0 adds gumbel noise for diversity (0 means deterministic top-k)
-    """
+   
     if prob.dim() == 3 and prob.size(0) == 1:
         prob = prob.squeeze(0)
     if valid_mask.dim() == 3 and valid_mask.size(0) == 1:
@@ -427,18 +409,16 @@ def topk_adj_from_prob(prob: torch.Tensor, valid_mask: torch.Tensor, k: int, add
     N = prob.size(0)
     A = np.zeros((N, N), dtype=np.int32)
 
-    # collect candidate indices
-    idx = torch.nonzero(valid_mask, as_tuple=False)  # [M,2]
+    idx = torch.nonzero(valid_mask, as_tuple=False)
     M = idx.size(0)
     if M == 0:
         return A
 
-    # clamp k
     k = int(max(0, min(int(k), int(M))))
     if k == 0:
         return A
 
-    scores = prob[valid_mask]  # [M]
+    scores = prob[valid_mask]  
     scores = torch.clamp(scores, 1e-6, 1 - 1e-6)
 
     if add_gumbel and add_gumbel > 0:
@@ -450,7 +430,7 @@ def topk_adj_from_prob(prob: torch.Tensor, valid_mask: torch.Tensor, k: int, add
 
  
     topk = torch.topk(scores, k=k, largest=True)
-    chosen = idx[topk.indices]  # [k,2]
+    chosen = idx[topk.indices] 
     ii = chosen[:, 0].detach().cpu().numpy()
     jj = chosen[:, 1].detach().cpu().numpy()
     A[ii, jj] = 1
@@ -458,7 +438,6 @@ def topk_adj_from_prob(prob: torch.Tensor, valid_mask: torch.Tensor, k: int, add
 
 
 def k_from_ref_dens(mean_ref_dens: float, allowed_edges: float) -> int:
-    # allowed_edges = valid_mask.sum()
     return int(round(float(mean_ref_dens) * float(allowed_edges)))
 
 def load_fewshot_ckpt(ckpt_path: Path) -> Tuple[FewShotStyleEncoder, StructureToGraphDecoder5, Dict[str, Any]]:
@@ -472,7 +451,6 @@ def load_fewshot_ckpt(ckpt_path: Path) -> Tuple[FewShotStyleEncoder, StructureTo
     encoder = FewShotStyleEncoder(in_dim=3, d_hidden=64, d_style=d_style).to(DEVICE)
     decoder = StructureToGraphDecoder5(d_style=d_style).to(DEVICE)
 
-    # load state dicts
     if "encoder" in ckpt:
         encoder.load_state_dict(ckpt["encoder"], strict=True)
     else:
@@ -481,7 +459,7 @@ def load_fewshot_ckpt(ckpt_path: Path) -> Tuple[FewShotStyleEncoder, StructureTo
     if "decoder" in ckpt:
         decoder.load_state_dict(ckpt["decoder"], strict=True)
     elif "model" in ckpt:
-        # legacy
+
         decoder.load_state_dict(ckpt["model"], strict=True)
     else:
         raise RuntimeError("ckpt missing key: decoder/model")
@@ -498,11 +476,6 @@ def load_fewshot_ckpt(ckpt_path: Path) -> Tuple[FewShotStyleEncoder, StructureTo
     return encoder, decoder, meta
 
 def srcsink_profile(A_bin: torch.Tensor) -> Dict[str, int]:
-    """
-    Count number of source and sink nodes from a binary adjacency matrix.
-    A_bin: (N, N) torch.Tensor with 0/1 entries
-    """
-    # out-degree = row sum, in-degree = col sum
     out_deg = A_bin.sum(dim=1)
     in_deg = A_bin.sum(dim=0)
 
@@ -519,13 +492,7 @@ def layer_pair_ratios_from_adj(
     layer_ids: List[int],
     L: Optional[int] = None,
 ) -> Tuple[torch.Tensor, float]:
-    """
-    Compute layer-pair edge ratio vector and neighbor-layer ratio.
 
-    Returns:
-        v : Tensor of shape [L*L], normalized layer-pair ratios
-        neighbor_ratio : fraction of edges that go to adjacent layers
-    """
     N = A_bin.size(0)
     if L is None:
         L = int(max(layer_ids)) + 1
@@ -548,7 +515,6 @@ def layer_pair_ratios_from_adj(
 
     v = mat.flatten() / total_edges
 
-    # neighbor ratio: edges between adjacent layers only
     neigh_edges = 0.0
     for li in range(L - 1):
         neigh_edges += mat[li, li + 1].item()
@@ -558,9 +524,7 @@ def layer_pair_ratios_from_adj(
     return v, float(neighbor_ratio)
 
 def l1_ratio_distance(v1: torch.Tensor, v2: torch.Tensor) -> float:
-    """
-    L1 distance between two ratio vectors.
-    """
+  
     if v1 is None or v2 is None:
         return float("inf")
     if v1.numel() != v2.numel():
@@ -568,11 +532,7 @@ def l1_ratio_distance(v1: torch.Tensor, v2: torch.Tensor) -> float:
     return float(torch.sum(torch.abs(v1 - v2)).item())
 
 def pick_and_store_calib_choice(rep: Dict[str, Any], bi: int, pick: str) -> Tuple[float, float, str]:
-    """
-    Return (best_temp, best_value, tag_str)
-      - pick=="thr"  -> best_value = best_thr
-      - pick=="topk" -> best_value = best_topk_scale
-    """
+   
     if rep.get("best_temp", None) is None:
         raise RuntimeError(f"Empty calibration for bucket={bucket_name(bi)}")
 
@@ -601,16 +561,9 @@ def coverage_topk_adj_from_prob(
     allow_skip: bool = True,
     add_gumbel: float = 0.0,
     seed: int = 0,
-    target_skip_frac: float = 0.0,   # <<< NEW: fraction of non-neighbor edges (span>=2) in fill stage
+    target_skip_frac: float = 0.0,   
 ) -> np.ndarray:
-    """
-    One-shot edge picking rule (NOT post-fix):
-      (1) coverage-in  : each node j with layer>0 gets >=1 incoming edge
-      (2) coverage-out : each node i with layer<L-1 gets >=1 outgoing edge
-      (3) fill remaining budget with TopK, BUT split into:
-            - skip edges (span>=2) quota
-            - neighbor edges (span==1) quota
-    """
+    
     if prob.dim() == 3 and prob.size(0) == 1:
         prob = prob.squeeze(0)
     if valid_mask.dim() == 3 and valid_mask.size(0) == 1:
@@ -619,7 +572,7 @@ def coverage_topk_adj_from_prob(
     N = int(prob.size(0))
     A = torch.zeros((N, N), dtype=torch.int32, device=prob.device)
 
-    idx = torch.nonzero(valid_mask, as_tuple=False)  # [M,2]
+    idx = torch.nonzero(valid_mask, as_tuple=False)  
     if seed % 100000 == 0:
         layer_ids_t = torch.tensor(layer_ids, device=prob.device, dtype=torch.long)
         src = idx[:, 0];
@@ -634,7 +587,6 @@ def coverage_topk_adj_from_prob(
 
     scores_all = prob[valid_mask].clamp(1e-6, 1 - 1e-6)
 
-    # optional gumbel noise
     if add_gumbel and float(add_gumbel) > 0.0:
         g = torch.Generator(device=scores_all.device)
         g.manual_seed(int(seed))
@@ -724,7 +676,7 @@ def coverage_topk_adj_from_prob(
     k_skip = int(round(remain * tsf))
     k_neigh = remain - k_skip
 
-    # pick skip first (if requested)
+  
     if k_skip > 0 and bool(skip_mask.any()):
         sc = scores_rem[skip_mask]
         idc = idx_rem[skip_mask]
@@ -733,12 +685,12 @@ def coverage_topk_adj_from_prob(
         chosen = idc[topk.indices]
         A[chosen[:, 0], chosen[:, 1]] = 1
         remain -= k1
-        k_neigh = remain  # whatever left goes to neigh
+        k_neigh = remain  
 
     if remain <= 0:
         return A.detach().cpu().numpy()
 
-    # then pick neighbor edges
+  
     if bool(neigh_mask.any()):
         sc = scores_rem[neigh_mask]
         idc = idx_rem[neigh_mask]
@@ -748,7 +700,6 @@ def coverage_topk_adj_from_prob(
         A[chosen[:, 0], chosen[:, 1]] = 1
         return A.detach().cpu().numpy()
 
-    # if no neighbor edges left, fall back to global
     k3 = int(min(remain, int(idx_rem.size(0))))
     topk = torch.topk(scores_rem, k=k3, largest=True)
     chosen = idx_rem[topk.indices]
@@ -796,7 +747,7 @@ def calibrate_bucket_temp_thr(
         raise ValueError(f"Unknown pick: {pick}")
 
     calib_n = int(calib_n)
-    keys = list(map(float, thr_list))  # thr list OR topk_scale list
+    keys = list(map(float, thr_list)) 
     calib_idxs = [rng.choice(pool) for _ in range(calib_n)]
     results: List[Dict[str, Any]] = []
 
@@ -840,8 +791,8 @@ def calibrate_bucket_temp_thr(
 
             Aref_bin = (A_tgt > 0.5).float()
             ref_stats = graph_dist_stats_from_adj(Aref_bin, layer_ids)
-            ref_span = ref_stats["span_hist"]  # [span1, span2, span3, span4, span5+]
-            target_skip_frac = float(1.0 - float(ref_span[0]))  # want span>=2 mass
+            ref_span = ref_stats["span_hist"] 
+            target_skip_frac = float(1.0 - float(ref_span[0]))  
 
             for key in keys:
                 if pick == "thr":
@@ -858,7 +809,7 @@ def calibrate_bucket_temp_thr(
                         k_total=k_edges,
                         allow_skip=bool(allow_skip),
                         add_gumbel=float(topk_gumbel),
-                        seed=seed + 100000 * bi,  # ✅ calibration 阶段用 bucket-level seed
+                        seed=seed + 100000 * bi, 
                         target_skip_frac=target_skip_frac,
                     )
 
@@ -990,7 +941,7 @@ def generate_bucket(
     uniq_signatures: set = set()
     picked_hist: Dict[str, int] = {}
 
-    # distribution logs (valid only)
+   
     ref_dist_list: List[dict] = []
     gen_dist_list: List[dict] = []
 
@@ -1082,7 +1033,7 @@ def generate_bucket(
 
         A_bin = torch.from_numpy((A > 0).astype(np.float32)).to(A_tgt.device)
 
-        # save distribution stats (valid only)
+        
         ref_dist_list.append(ref_stats)
         gen_dist_list.append(graph_dist_stats_from_adj(A_bin, layer_ids))
 
@@ -1154,7 +1105,6 @@ def main() -> None:
     ap.add_argument("--tries_per_bucket", type=int, default=50)
     ap.add_argument("--max_tries_per_bucket", type=int, default=3000)
 
-    # calibration
     ap.add_argument("--calib_n", type=int, default=120)
     ap.add_argument("--temps", type=float, nargs="+", default=[0.5, 0.7, 0.9, 1, 1.3, 1.6, 2, 3, 4, 5, 6, 8])
     ap.add_argument("--thr_list", type=float, nargs="+", default=[0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.92, 0.94, 0.95, 0.96, 0.97, 0.98])
@@ -1170,7 +1120,6 @@ def main() -> None:
     ap.add_argument("--topk_scale", type=float, default=1.0,
                     help="edge budget multiplier for topk mode (k = dens_ref * allowed * topk_scale)")
 
-    # NEW: allow_skip (so your CLI works)
     ap.add_argument("--allow_skip", type=int, default=1,
                     help="topk coverage: 1 allow cross-layer edges in coverage (srcL<dstL), 0 only adjacent (dstL=srcL+1)")
 
