@@ -1,4 +1,4 @@
-
+# config.py
 from pathlib import Path
 import torch
 
@@ -44,4 +44,5 @@ SRC_SINK_K = 10.0
 
 # === Device ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
