@@ -9,9 +9,9 @@ import torch.nn.functional as F
 from utils import build_order_from_widths, mask_allowed_pairs
 
 
-# -----------------------------
+
 # Few-shot style encoder (minimal)
-# -----------------------------
+
 class FewShotStyleEncoder(nn.Module):
     """
     Minimal graph encoder:
@@ -44,16 +44,10 @@ class FewShotStyleEncoder(nn.Module):
         return z
 
 
-# -----------------------------
-# Structure decoder (keep your class name)
-# -----------------------------
-class StructureToGraphDecoder5(nn.Module):
-    """
-    v2 decoder:
-      - predicts adjacency logits A_logits [N, N]
-      - accepts z_style (few-shot latent) and injects into node representations
-    """
 
+# Structure decoder
+
+class StructureToGraphDecoder5(nn.Module):
     def __init__(
         self,
         d_model: int = 128,
@@ -70,18 +64,15 @@ class StructureToGraphDecoder5(nn.Module):
         self.max_rank = max_rank
         self.max_pos = max_pos
 
-        # embeddings for (layer_id, pos_in_layer)
         self.rank_emb = nn.Embedding(max_rank + 1, d_model)
         self.pos_emb = nn.Embedding(max_pos + 1, d_model)
 
-        # structure vector conditioning (5-dim)
         self.s_proj = nn.Sequential(
             nn.Linear(5, d_model),
             nn.ReLU(),
             nn.Linear(d_model, d_model),
         )
 
-        # style conditioning
         self.style_proj = nn.Sequential(
             nn.Linear(d_style, d_model),
             nn.ReLU(),
@@ -99,7 +90,6 @@ class StructureToGraphDecoder5(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(enc_layer, num_layers=n_layers)
 
-        # pairwise scorer
         self.pair = nn.Sequential(
             nn.Linear(2 * d_model, d_model),
             nn.ReLU(),
@@ -131,7 +121,6 @@ class StructureToGraphDecoder5(nn.Module):
         if s_vec_b.size(0) != 1:
             raise ValueError("This minimal decoder expects batch size 1 (B=1).")
 
-        # IMPORTANT FIX: build_order_from_widths returns List[Tuple[layer_id, pos]]
         order = build_order_from_widths(widths)  # [(li, pos), ...]
         N = len(order)
 
@@ -144,10 +133,8 @@ class StructureToGraphDecoder5(nn.Module):
         x = self.rank_emb(ranks) + self.pos_emb(pos)  # [N, d_model]
         x = x.unsqueeze(0)  # [1, N, d_model]
 
-        # add structure conditioning
         x = x + self.s_proj(s_vec_b).unsqueeze(1)  # [1,1,d]
 
-        # add style conditioning
         if z_style is not None:
             if z_style.dim() == 1:
                 z_b = z_style.unsqueeze(0)  # [1,d_style]
@@ -155,19 +142,17 @@ class StructureToGraphDecoder5(nn.Module):
                 z_b = z_style
             x = x + self.style_proj(z_b).unsqueeze(1)
 
-        # transformer
         h = self.encoder(x).squeeze(0)  # [N, d_model]
 
-        # score all pairs
         hi = h.unsqueeze(1).expand(N, N, self.d_model)
         hj = h.unsqueeze(0).expand(N, N, self.d_model)
         pair_in = torch.cat([hi, hj], dim=-1)        # [N,N,2d]
         logits = self.pair(pair_in).squeeze(-1)      # [N,N]
 
-        # mask illegal pairs (only earlier layer -> later layer)
         allow_np = mask_allowed_pairs(widths)        # [N,N] float 0/1
         allow = torch.tensor(allow_np, device=logits.device).bool()
         logits = logits.masked_fill(~allow, float("-inf"))
         logits.fill_diagonal_(float("-inf"))
 
         return logits
+
