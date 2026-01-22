@@ -1,5 +1,5 @@
 # visualize_taskset_fixed.py
-# 固定参数版：直接运行即可，无需命令行参数
+
 
 from pathlib import Path
 import json
@@ -13,17 +13,15 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 
-# =========================
-# 1️⃣ 固定参数（只改这里）
-# =========================
-ROOT_DIR = Path(r"E:\DAG-GNN\src1\exp_ratio_v2_timehead_lp300_tmax299999")   # ← 你的生成 DAG 目录
+
+ROOT_DIR = Path(r"E:\DAG-GNN\src1\exp_ratio_v2_timehead_lp300_tmax299999")   # your dag 
 OUT_DIR  = Path(r"E:\DAG-GNN\src1\exp_ratio_v2_timehead_lp300_tmax299999_viz")
-FORMAT   = "png"   # "png" or "pdf"
+FORMAT   = "png"   
 
 TIME_KEY = "label"
 FALLBACK_KEYS = ["label_300", "critical_time", "time", "C", "weight", "t"]
 
-MAX_GRAPHS = 0     # 0 = 全部
+MAX_GRAPHS = 0     
 SEED = 42
 
 SHOW_EDGE_LABELS = True
@@ -33,9 +31,7 @@ FONT_SIZE = 8
 EDGE_ALPHA = 0.85
 
 
-# =========================
-# 2️⃣ 工具函数（原样复用）
-# =========================
+
 def load_graph_files(root: Path) -> List[Path]:
     files = []
     for p in root.rglob("*"):
@@ -120,9 +116,7 @@ def draw_one(G: nx.DiGraph, title: str, out_path: Path):
     plt.close(fig)
 
 
-# =========================
-# 3️⃣ 主流程
-# =========================
+
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -162,3 +156,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
