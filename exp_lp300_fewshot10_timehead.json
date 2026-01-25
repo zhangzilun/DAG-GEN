@@ -1,7 +1,7 @@
 {
-  "data_dir": "../src/gpickle2_lp300",   # change your data
-  "ckpt_struct": "checkpoints_fewshot_encoder_spanlp_v2_gnn/fewshot_best.pt",
-  "ckpt_time": "checkpoints_time_head_lp300/fewshot_time_best.pt",
+  "data_dir": "../src/gpickle2_lp300",   
+  "ckpt_struct": "checkpoints/fewshot_best.pt",
+  "ckpt_time": "checkpoints/fewshot_time_best.pt",
   "k_shot": 10,
   "calib_n": 600,
   "temps": [0.10, 0.12, 0.15, 0.18, 0.20, 0.25, 0.30],
@@ -20,6 +20,7 @@
   "out_dir": "exp_ratio_v2_timehead_lp300_tmax299999"
 }
 }
+
 
 
 
