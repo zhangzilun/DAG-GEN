@@ -123,10 +123,6 @@ def save_checkpoint(
     ckpt_dir: str,
     is_best: bool = False,
 ):
-    """
-    model_dict: dict of torch.nn.Module, e.g.
-        {"encoder": encoder, "decoder": decoder}
-    """
     os.makedirs(ckpt_dir, exist_ok=True)
 
     state = {
@@ -149,14 +145,7 @@ def load_checkpoint(
     ckpt_path: str,
     device: torch.device = "cpu",
 ):
-    """
-    Load checkpoint into model_dict.
-    Compatible with BOTH:
-    - old format: encoder / decoder at top-level
-    - new format: ckpt["models"][name]
-
-    Returns (start_epoch, best_loss)
-    """
+    
     ckpt = torch.load(ckpt_path, map_location=device)
 
     
@@ -180,4 +169,5 @@ def load_checkpoint(
     best_loss = ckpt.get("best_loss", float("inf"))
 
     return start_epoch, best_loss
+
 
