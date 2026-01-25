@@ -1,11 +1,12 @@
-# infer_fewshot_structure1_ratio_v2_timehead.py  -- FULL REPLACE (STRUCTURE FIRST, THEN TIME, ENFORCE LP<=300)
-
+# infer_fewshot_structure1_ratio_v2_timehead.py  -- FULL REPLACE
+# STRUCTURE FIRST, THEN TIME, ENFORCE LP<=tmax
 from __future__ import annotations
 
 import argparse
 import json
 import math
 import random
+import inspect
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -13,6 +14,7 @@ import numpy as np
 import networkx as nx
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from config import DEVICE
 from models import FewShotStyleEncoder, StructureToGraphDecoder5
@@ -35,26 +37,166 @@ class TimeHead(nn.Module):
 
     def forward(self, z: torch.Tensor, e_feat: torch.Tensor) -> torch.Tensor:
         x = torch.cat([z, e_feat], dim=-1)
-        return self.mlp(x).squeeze(-1)  # predicts log1p(time)
+        return self.mlp(x).squeeze(-1)  
 
 
-def pool_style(z: torch.Tensor) -> torch.Tensor:
-    if z.dim() == 1:
-        return z.unsqueeze(0)
-    if z.dim() == 2 and z.size(0) > 1:
-        return z.mean(dim=0, keepdim=True)
-    return z
+class GNNStyleEncoder(nn.Module):
+   
+    def __init__(self, in_dim: int = 3, d_hidden: int = 64, d_style: int = 32, n_mp: int = 2, dropout: float = 0.1):
+        super().__init__()
+        self.n_mp = int(n_mp)
+        self.lin_in = nn.Linear(in_dim, d_hidden)
+        self.lin_self = nn.ModuleList([nn.Linear(d_hidden, d_hidden) for _ in range(self.n_mp)])
+        self.lin_in_nei = nn.ModuleList([nn.Linear(d_hidden, d_hidden) for _ in range(self.n_mp)])
+        self.lin_out_nei = nn.ModuleList([nn.Linear(d_hidden, d_hidden) for _ in range(self.n_mp)])
+        self.drop = nn.Dropout(dropout)
+        self.proj = nn.Linear(d_hidden, d_style)
 
+    def forward(self, X: torch.Tensor, A: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        m = mask.float()
+        X = X * m.unsqueeze(-1)
+        A = (A > 0.5).float()
+        A = A * (m.unsqueeze(1) * m.unsqueeze(2))
+
+        h = F.relu(self.lin_in(X))
+        h = self.drop(h)
+
+        out_deg = A.sum(dim=2).clamp_min(1.0)
+        in_deg = A.sum(dim=1).clamp_min(1.0)
+
+        for k in range(self.n_mp):
+            h_out = torch.bmm(A, h) / out_deg.unsqueeze(-1)
+            h_in = torch.bmm(A.transpose(1, 2), h) / in_deg.unsqueeze(-1)
+            h_new = self.lin_self[k](h) + self.lin_out_nei[k](h_out) + self.lin_in_nei[k](h_in)
+            h = F.relu(h_new)
+            h = self.drop(h)
+            h = h * m.unsqueeze(-1)
+
+        h_sum = (h * m.unsqueeze(-1)).sum(dim=1)
+        denom = m.sum(dim=1).clamp_min(1.0).unsqueeze(-1)
+        h_mean = h_sum / denom
+        return self.proj(h_mean)
+
+
+class StyleEncoderAdapter(nn.Module):
+    
+    def __init__(self, gnn: GNNStyleEncoder):
+        super().__init__()
+        self.gnn = gnn
+
+    def forward(self, X: torch.Tensor, M: torch.Tensor) -> torch.Tensor:
+        K, N, _ = X.shape
+        A = torch.zeros((K, N, N), dtype=X.dtype, device=X.device)
+        eye = torch.eye(N, dtype=X.dtype, device=X.device).unsqueeze(0).expand(K, -1, -1)
+        A = A + eye
+        return self.gnn(X, A, M)
+
+
+
+
+import inspect
+import torch
+import torch.nn as nn
+from typing import List
+
+class DecoderAdapter(nn.Module):
+  
+    def __init__(self, base: nn.Module):
+        super().__init__()
+        self.base = base
+        try:
+            self._sig = inspect.signature(base.forward)
+            self._param_names = [p.name for p in self._sig.parameters.values() if p.name != "self"]
+        except Exception:
+            self._sig = None
+            self._param_names = None
+
+    @staticmethod
+    def _norm(name: str) -> str:
+        return name.replace("-", "_").lower()
+
+    @staticmethod
+    def _expand_to_nodes(z: torch.Tensor, widths: List[int]) -> torch.Tensor:
+       
+        N = int(sum(int(w) for w in widths))
+        if N <= 0:
+            return z
+        if z.dim() == 2:
+            return z.unsqueeze(1).expand(z.size(0), N, z.size(1))
+        if z.dim() == 1:
+            return z.view(1, 1, -1).expand(1, N, z.numel())
+        return z
+
+    @staticmethod
+    def _pool_to_global(z: torch.Tensor) -> torch.Tensor:
+        
+        if z.dim() == 3:
+            return z.mean(dim=1)
+        return z
+
+    def _call_base(self, s_vec: torch.Tensor, widths: List[int], z_style: torch.Tensor):
+     
+        if not self._param_names:
+            try:
+                return self.base(s_vec=s_vec, widths=widths, z_style=z_style)
+            except Exception:
+                return self.base(s_vec, z_style, widths)
+
+        args = []
+        for n in self._param_names:
+            nnm = self._norm(n)
+            if nnm in ("s_vec", "svec", "s_vector", "s", "struct", "structure", "svec_in"):
+                args.append(s_vec)
+            elif nnm in ("widths", "w", "ws", "layer_widths", "layerwidths"):
+                args.append(widths)
+            elif nnm in ("z_style", "z", "style", "zsty", "zstyle", "style_vec", "stylevec"):
+                args.append(z_style)
+            else:
+                p = self._sig.parameters[n]
+                if p.default is not inspect._empty:
+                    continue
+                raise TypeError(f"DecoderAdapter: unknown required param '{n}' in {self._sig}")
+
+        try:
+            return self.base(*args)
+        except TypeError:
+
+            kwargs = {}
+            for n in self._param_names:
+                nnm = self._norm(n)
+                if nnm in ("s_vec", "svec", "s_vector", "s", "struct", "structure", "svec_in"):
+                    kwargs[n] = s_vec
+                elif nnm in ("widths", "w", "ws", "layer_widths", "layerwidths"):
+                    kwargs[n] = widths
+                elif nnm in ("z_style", "z", "style", "zsty", "zstyle", "style_vec", "stylevec"):
+                    kwargs[n] = z_style
+            return self.base(**kwargs)
+
+    def forward(self, s_vec: torch.Tensor, widths: List[int], z_style: torch.Tensor):
+        z1 = z_style
+        z2 = self._expand_to_nodes(z_style, widths)
+        z3 = self._pool_to_global(z2)
+
+        last_err = None
+        for zi in (z1, z2, z3):
+            try:
+                return self._call_base(s_vec, widths, zi)
+            except RuntimeError as e:
+                msg = str(e)
+                last_err = e
+                continue
+
+        raise last_err
 
 def widths_to_layer_ids(widths: List[int]) -> List[int]:
-    layer_ids = []
+    layer_ids: List[int] = []
     for li, w in enumerate(widths):
         layer_ids += [li] * int(w)
     return layer_ids
 
 
 def node_feats_from_generated(A: np.ndarray, widths: List[int]) -> torch.Tensor:
-    """node feat: [layer_norm, indeg_norm, outdeg_norm]"""
+    
     N = int(A.shape[0])
     layer_ids = widths_to_layer_ids(widths)
     L = max(1, len(widths))
@@ -69,7 +211,7 @@ def node_feats_from_generated(A: np.ndarray, widths: List[int]) -> torch.Tensor:
     indeg = indeg / indeg.max().clamp_min(1.0)
     outdeg = outdeg / outdeg.max().clamp_min(1.0)
 
-    return torch.stack([layer_norm, indeg, outdeg], dim=-1)  # [N,3]
+    return torch.stack([layer_norm, indeg, outdeg], dim=-1)  
 
 
 def build_edge_feat_from_generated(
@@ -77,11 +219,11 @@ def build_edge_feat_from_generated(
     widths: List[int],
     lp_bins: int,
 ) -> Tuple[torch.Tensor, List[Tuple[int, int]]]:
-    """edge feat = [xi(3), xj(3), span_norm(1), span_onehot(5), layerpair_onehot(lp_bins^2)]"""
+    
     N = int(A.shape[0])
     layer_ids = widths_to_layer_ids(widths)
     L = max(1, len(widths))
-    X = node_feats_from_generated(A, widths)  # [N,3]
+    X = node_feats_from_generated(A, widths)
 
     edges = [(int(i), int(j)) for i, j in zip(*np.where(A > 0.5))]
     feats: List[torch.Tensor] = []
@@ -92,7 +234,7 @@ def build_edge_feat_from_generated(
 
         span = max(1, lj - li)
         span_norm = float(span) / float(max(1, L - 1))
-        span_bin = min(5, span)  # 1..5
+        span_bin = min(5, span)  
         span_oh = torch.zeros((5,), dtype=torch.float32)
         span_oh[span_bin - 1] = 1.0
 
@@ -113,7 +255,7 @@ def build_edge_feat_from_generated(
 
 
 def longest_path_time_from_edges(N: int, edges: List[Tuple[int, int]], w: np.ndarray) -> float:
-    """Compute longest path time on a DAG with given edge weights (assumes acyclic)."""
+   
     Gtmp = nx.DiGraph()
     Gtmp.add_nodes_from(range(N))
     for (u, v), t in zip(edges, w.tolist()):
@@ -151,26 +293,21 @@ def predict_lp_raw_only(
     return longest_path_time_from_edges(N, edges, y)
 
 
-
 def attach_time_labels(
-    G,
-    A,
-    widths,
-    z_style,
-    time_head,
-    lp_bins,
-    label_key,
-    integerize,
-    tmax_longest_path,
-    lp_min=240.0,
-):
-    import numpy as np
-    import networkx as nx
-    import torch
+    G: nx.DiGraph,
+    A: np.ndarray,
+    widths: List[int],
+    z_style: torch.Tensor,
+    time_head: nn.Module,
+    lp_bins: int,
+    label_key: str,
+    integerize: int,
+    tmax_longest_path: float,
+    lp_min: float = 0.0,
+) -> None:
 
-    # === build edge features  ===
     e_feat, edges = build_edge_feat_from_generated(A, widths, lp_bins)
-    if e_feat.numel() == 0:
+    if e_feat.numel() == 0 or len(edges) == 0:
         return
 
     e_feat = e_feat.to(DEVICE)
@@ -182,84 +319,135 @@ def attach_time_labels(
         y = torch.expm1(y_hat).clamp_min(1.0).cpu().numpy().astype(np.float32)
 
     N = int(A.shape[0])
-    Gtmp = nx.DiGraph()
-    Gtmp.add_nodes_from(range(N))
-    for (u, v), t in zip(edges, y.tolist()):
-        Gtmp.add_edge(int(u), int(v), w=float(t))
+    lp = longest_path_time_from_edges(N, edges, y)
 
-    topo = list(nx.topological_sort(Gtmp))
-    dp = {n: 0.0 for n in topo}
-    for u in topo:
-        for v in Gtmp.successors(u):
-            nv = dp[u] + float(Gtmp.edges[u, v]["w"])
-            if dp[v] < nv:
-                dp[v] = nv
-    lp = max(dp.values()) if dp else 0.0
-
-    
     eps = 1e-6
     if lp > eps:
-        if lp < lp_min:
-            y *= (lp_min / lp)
-        elif lp > tmax_longest_path:
-            y *= ((tmax_longest_path - 1e-3) / lp)
+        if lp_min and lp < float(lp_min):
+            y *= (float(lp_min) / lp)
+        if tmax_longest_path and lp > float(tmax_longest_path):
+            y *= ((float(tmax_longest_path) - 1e-3) / lp)
 
     if int(integerize):
         y = np.round(y)
 
-    # === write back ===
     for (u, v), t in zip(edges, y.tolist()):
         if G.has_edge(u, v):
             G.edges[u, v][label_key] = float(t)
 
+def _copy_partial(dst: torch.Tensor, src: torch.Tensor) -> torch.Tensor:
+    out = dst.clone()
+    slices = tuple(slice(0, min(d, s)) for d, s in zip(dst.shape, src.shape))
+    out[slices] = src[slices]
+    return out
+
+def _remap_decoder_keys(sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+   
+    out: Dict[str, torch.Tensor] = {}
+    for k, v in sd.items():
+        if k.startswith("s_proj."):
+            continue
+
+        if k.startswith("style_proj.0."):
+            out[k.replace("style_proj.0.", "style_proj.")] = v
+            continue
+
+        if k.startswith("pair.0."):
+            out[k.replace("pair.0.", "edge_mlp.0.")] = v
+            continue
+        if k.startswith("pair.2."):
+            out[k.replace("pair.2.", "edge_mlp.3.")] = v
+            continue
+
+        out[k] = v
+    return out
+
+def smart_load_decoder_v2(decoder: nn.Module, sd_raw: Dict[str, torch.Tensor]) -> None:
+   
+    sd = _remap_decoder_keys(sd_raw)
+    cur = decoder.state_dict()
+    new_sd: Dict[str, torch.Tensor] = {}
+
+    for k, v in sd.items():
+        if k not in cur:
+            continue
+        if cur[k].shape == v.shape:
+            new_sd[k] = v
+        else:
+            if ("rank_emb.weight" in k) or ("pos_emb.weight" in k):
+                new_sd[k] = _copy_partial(cur[k], v)
+            else:
+                continue
+
+    cur.update(new_sd)
+    decoder.load_state_dict(cur, strict=True)
 
 def load_structure_ckpt(ckpt_struct: Path) -> Tuple[Any, Any, Dict[str, Any]]:
-    enc, dec, meta = INF.load_fewshot_ckpt(ckpt_struct)
+    ckpt = torch.load(str(ckpt_struct), map_location="cpu")
+
+    enc_sd = ckpt.get("encoder", {}) or {}
+    is_gnn = any(k.startswith("lin_in.") for k in enc_sd.keys()) or ("lin_in.weight" in enc_sd)
+
+    d_style = int(ckpt.get("d_style", 32))
+    if is_gnn:
+        gnn = GNNStyleEncoder(in_dim=3, d_hidden=64, d_style=d_style, n_mp=int(ckpt.get("n_mp", 2))).to(DEVICE)
+        gnn.load_state_dict(enc_sd, strict=True)
+        enc = StyleEncoderAdapter(gnn).to(DEVICE) 
+        enc_kind = "GNNStyleEncoder(+Adapter)"
+    else:
+        enc = FewShotStyleEncoder(in_dim=3, d_hidden=64, d_style=d_style).to(DEVICE)
+        if "encoder" in ckpt:
+            enc.load_state_dict(enc_sd, strict=True)
+        enc_kind = "FewShotStyleEncoder"
+
+    dec = StructureToGraphDecoder5(max_rank=64).to(DEVICE)
+    if "decoder" in ckpt:
+        try:
+            dec.load_state_dict(ckpt["decoder"], strict=True)
+        except Exception:
+            smart_load_decoder_v2(dec, ckpt["decoder"])
+
+    meta = ckpt.get("meta", {}) or {}
+    meta["loaded_with"] = "smart_load_decoder_v2(max_rank=64)"
+    meta["enc_kind"] = enc_kind
+    meta["d_style"] = d_style
     return enc, dec, meta
 
 
-def load_time_head_ckpt(
-    ckpt_time: Path,
-    lp_bins: int,
-    encoder: Optional[Any] = None,
-    decoder: Optional[Any] = None,
-) -> Tuple[Any, Any, TimeHead, Dict[str, Any]]:
-    """
-    Supports:
-      A) ckpt_time has encoder/decoder/time_head
-      B) ckpt_time only has time_head -> you must provide --ckpt_struct for encoder/decoder
-    """
-    ckpt = torch.load(str(ckpt_time), map_location=DEVICE)
-    if not isinstance(ckpt, dict):
-        raise RuntimeError("ckpt_time must be a dict checkpoint")
-
+def load_time_head_ckpt(ckpt_path: Path, lp_bins: int):
+    ckpt = torch.load(str(ckpt_path), map_location="cpu")
     d_style = int(ckpt.get("d_style", 32))
-    ckpt_k = int(ckpt.get("k_shot", 10))
+    k_shot = int(ckpt.get("k_shot", 10))
 
-    # If ckpt_time contains encoder/decoder, load them
-    if "encoder" in ckpt and "decoder" in ckpt:
-        enc = FewShotStyleEncoder(in_dim=3, d_hidden=64, d_style=d_style).to(DEVICE)
-        dec = StructureToGraphDecoder5(d_style=d_style).to(DEVICE)
-        enc.load_state_dict(ckpt["encoder"], strict=True)
-        dec.load_state_dict(ckpt["decoder"], strict=True)
-        encoder = enc
-        decoder = dec
+    enc_sd = ckpt.get("encoder", {}) or {}
+    is_gnn = any(k.startswith("lin_in.") for k in enc_sd.keys()) or ("lin_in.weight" in enc_sd)
+
+    if is_gnn:
+        enc = GNNStyleEncoder(in_dim=3, d_hidden=64, d_style=d_style, n_mp=2).to(DEVICE)
+        enc.load_state_dict(enc_sd, strict=True)
+        enc = StyleEncoderAdapter(enc).to(DEVICE)
+        enc_kind = "GNNStyleEncoder(+Adapter)"
     else:
-        if encoder is None or decoder is None:
-            raise RuntimeError("ckpt_time has no encoder/decoder; please provide --ckpt_struct")
+        enc = FewShotStyleEncoder(in_dim=3, d_hidden=64, d_style=d_style).to(DEVICE)
+        enc.load_state_dict(enc_sd, strict=True)
+        enc_kind = "FewShotStyleEncoder"
 
-    if "time_head" not in ckpt:
-        raise RuntimeError("ckpt_time missing key: time_head")
+    dec = StructureToGraphDecoder5().to(DEVICE)
+    if "decoder" in ckpt:
+        try:
+            dec.load_state_dict(ckpt["decoder"], strict=True)
+        except Exception:
+            dec.load_state_dict(ckpt["decoder"], strict=False)
+    dec = DecoderAdapter(dec).to(DEVICE)
 
     time_head = TimeHead(d_style=d_style, lp_bins=int(lp_bins), hidden=256).to(DEVICE)
     time_head.load_state_dict(ckpt["time_head"], strict=True)
 
-    encoder.eval()
-    decoder.eval()
-    time_head.eval()
-
-    meta = {"d_style": d_style, "ckpt_k_shot": ckpt_k, "time_ckpt": str(ckpt_time)}
-    return encoder, decoder, time_head, meta
+    meta = ckpt.get("meta", {}) or {}
+    meta["enc_kind"] = enc_kind
+    meta["d_style"] = d_style
+    meta["ckpt_k_shot"] = k_shot
+    return enc, dec, time_head, meta
 
 
 def save_graph_gpickle_json(G: nx.DiGraph, out_dir: Path, base: str) -> None:
@@ -267,7 +455,6 @@ def save_graph_gpickle_json(G: nx.DiGraph, out_dir: Path, base: str) -> None:
     p_gpk = out_dir / f"{base}.gpickle"
     p_json = out_dir / f"{base}.json"
 
-    # robust gpickle
     try:
         from networkx.readwrite.gpickle import write_gpickle as _w
         _w(G, p_gpk)
@@ -281,100 +468,14 @@ def save_graph_gpickle_json(G: nx.DiGraph, out_dir: Path, base: str) -> None:
         json.dump(data, f, ensure_ascii=False)
 
 
-
-def calibrate_lp_min_for_bucket(
-    files,
-    pool,
-    encoder,
-    decoder,
-    time_head,
-    bi,
-    k_shot,
-    calib_n,
-    best_temp,
-    best_thr,
-    best_topk_scale,
-    args,
-    seed,
-    q=0.20,   
-):
-    import numpy as np
-    import random
-
-    rng = random.Random(int(seed) + 7777 * int(bi))
-    lp_list = []
-
-    
-    for _ in range(int(calib_n)):
-        pick = rng.sample(pool, int(k_shot) + 1)
-        sup_idx = pick[: int(k_shot)]
-        ref_idx = pick[-1]
-
-        sup_graphs = [INF.read_graph_any(files[i]) for i in sup_idx]
-        ref_graph = INF.read_graph_any(files[ref_idx])
-
-       
-        out = INF.generate_one_strict(
-            encoder=encoder,
-            decoder=decoder,
-            sup_graphs=sup_graphs,
-            ref_graph=ref_graph,
-            temp=float(best_temp),
-            thr=float(best_thr),
-            pick=str(args.pick),
-            topk_scale=float(best_topk_scale),
-            topk_gumbel=float(args.topk_gumbel),
-            svec_mode=str(args.svec_mode),
-            allow_skip=bool(int(args.allow_skip)),
-            seed=int(seed) + 100000 * int(bi) + _,
-        )
-        if not out.get("ok", False):
-            continue
-
-        Ggen = out["G"]           # nx.DiGraph
-        A_np = out["A_np"]        # numpy adjacency
-        widths = out["widths"]    # list[int]
-        z = out["z_style"]        # [1,d]
-
-        lp_raw = predict_lp_raw_only(
-            G=Ggen,
-            A=A_np,
-            widths=widths,
-            z_style=z,
-            time_head=time_head,
-            lp_bins=int(args.lp_bins),
-            label_key=str(args.label_key),
-            integerize=0,
-        )
-        if np.isfinite(lp_raw) and lp_raw > 0:
-            lp_list.append(float(lp_raw))
-
-    if len(lp_list) == 0:
-        return 0.0, {"n": 0, "lp_min": 0.0}
-
-    lp_arr = np.asarray(lp_list, dtype=np.float32)
-    lp_min = float(np.quantile(lp_arr, float(q)))
-    stats = {
-        "n": int(lp_arr.size),
-        "q": float(q),
-        "lp_min": lp_min,
-        "p50": float(np.quantile(lp_arr, 0.50)),
-        "p90": float(np.quantile(lp_arr, 0.90)),
-        "max": float(lp_arr.max()),
-    }
-    return lp_min, stats
-
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_dir", type=str, default=r"..\data\gpickle2")
 
-    ap.add_argument("--ckpt_struct", type=str, default="", help="structure ckpt (needed if ckpt_time lacks encoder/decoder)")
-    ap.add_argument("--ckpt_time", type=str, help="time ckpt with time_head (+ optionally encoder/decoder)")
+    ap.add_argument("--ckpt_struct", type=str, default="", help="structure ckpt (optional)")
+    ap.add_argument("--ckpt_time", type=str, default="", help="time ckpt with time_head (+ encoder)")
 
     ap.add_argument("--k_shot", type=int, default=10)
-
     ap.add_argument("--pick", type=str, default="topk", choices=["thr", "topk"])
     ap.add_argument("--allow_skip", type=int, default=1)
     ap.add_argument("--tries_per_bucket", type=int, default=50)
@@ -388,8 +489,8 @@ def main() -> None:
 
     ap.add_argument("--lp_bins", type=int, default=8)
     ap.add_argument("--label_key", type=str, default="label")
-    ap.add_argument("--integerize", type=int, default=1)
-    ap.add_argument("--tmax", type=float, default=300.0, help="enforce longest path time <= tmax by scaling all edge times")
+    ap.add_argument("--integerize", type=int, default=0)
+    ap.add_argument("--tmax", type=float, default=300.0)
 
     ap.add_argument("--save_valid", type=int, default=1)
     ap.add_argument("--out_dir", type=str, default="exp_ratio_v2_timehead_Tmax")
@@ -397,13 +498,11 @@ def main() -> None:
 
     ap.add_argument("--config", type=str, default="", help="path to json config (optional)")
 
-    -
     def _load_json(p: str) -> Dict[str, Any]:
         with open(p, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def _apply_cfg(args: argparse.Namespace, cfg: Dict[str, Any]) -> argparse.Namespace:
-        # cfg -> args (only keys that exist in args)
         for k, v in cfg.items():
             if hasattr(args, k):
                 setattr(args, k, v)
@@ -422,23 +521,18 @@ def main() -> None:
             pass
 
     args = ap.parse_args()
-
-
-    # if --config provided, load and apply it first
     if getattr(args, "config", ""):
         cfg = _load_json(args.config)
         args = _apply_cfg(args, cfg)
-    # dump final resolved config for reproducibility
-    # NOTE: out_dir may come from cfg
-    _dump_resolved(Path(getattr(args, "out_dir")), args)
 
+    out_dir = Path(getattr(args, "out_dir"))
+    _dump_resolved(out_dir, args)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
     data_dir = Path(args.data_dir)
-    out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     files = INF.load_graph_files(data_dir)
@@ -446,17 +540,23 @@ def main() -> None:
     bucket_to_idx = INF.index_files_by_bucket(files)
     INF.print_bucket_counts(bucket_to_idx)
 
-    enc_struct = dec_struct = None
-    meta_struct: Dict[str, Any] = {}
     if args.ckpt_struct:
-        enc_struct, dec_struct, meta_struct = load_structure_ckpt(Path(args.ckpt_struct))
-        print(f"[OK] Loaded structure-ckpt: {args.ckpt_struct} (d_style={meta_struct.get('d_style')} ckpt_k_shot={meta_struct.get('ckpt_k_shot')})")
+        struct_encoder, struct_decoder, meta_struct = load_structure_ckpt(Path(args.ckpt_struct))
+        struct_decoder = DecoderAdapter(struct_decoder).to(DEVICE)
+        print(f"[OK] Loaded structure-ckpt: {args.ckpt_struct}")
+    else:
+        struct_encoder = None
+        struct_decoder = None
+        meta_struct = {}
 
-    encoder, decoder, time_head, meta_time = load_time_head_ckpt(Path(args.ckpt_time), lp_bins=int(args.lp_bins), encoder=enc_struct, decoder=dec_struct)
+    time_encoder, time_decoder_unused, time_head, meta_time = load_time_head_ckpt(Path(args.ckpt_time), lp_bins=int(args.lp_bins))
     print(f"[OK] Loaded time-ckpt: {args.ckpt_time} (d_style={meta_time['d_style']} ckpt_k_shot={meta_time['ckpt_k_shot']} run_k_shot={args.k_shot})")
-
-    if args.ckpt_struct and meta_struct.get("d_style", meta_time["d_style"]) != meta_time["d_style"]:
-        print(f"[WARN] d_style mismatch: struct={meta_struct.get('d_style')} time={meta_time['d_style']}")
+    print(f"[OK] time-encoder-kind: {meta_time['enc_kind']}")
+    print(f"[OK] structure-encoder-kind: {meta_struct['enc_kind']}")
+    if struct_encoder is None:
+        struct_encoder = time_encoder
+        struct_decoder = time_decoder_unused
+        print("[WARN] ckpt_struct not provided -> using time-ckpt encoder/decoder for structure stage (best-effort).")
 
     for bi in range(len(INF.BUCKETS)):
         bname = INF.bucket_name(bi)
@@ -467,8 +567,8 @@ def main() -> None:
             continue
 
         calib = INF.calibrate_bucket_temp_thr(
-            encoder=encoder,
-            decoder=decoder,
+            encoder=struct_encoder,
+            decoder=struct_decoder,
             files=files,
             bucket_to_idx=bucket_to_idx,
             bi=bi,
@@ -498,7 +598,6 @@ def main() -> None:
             best_topk_scale = float(calib.get("best_topk_scale", args.thr_list[0]))
             print(f"[CALIB] pick=topk best_temp={best_temp:.3f} best_topk_scale={best_topk_scale:.3f} best_valid_rate={calib.get('best_valid_rate',0):.3f} dens_err={calib.get('best_dens_mean_abs_err',0):.4f}")
 
-        # -------- B2: dynamic lp_min per bucket (from raw LP quantile) --------
         lp_q = 0.20
         lp_calib_n = 200
         lp_list: List[float] = []
@@ -523,9 +622,8 @@ def main() -> None:
             A_tgt = INF.graph_to_adj_target(Gt, node_order).to(DEVICE)
 
             X_list = INF.sample_k_support(bucket_to_idx, files, bi, int(args.k_shot), lp_rng, exclude=tidx)
-            z = INF.encode_style(encoder, X_list)
-
-            out_dec = decoder(s_vec, widths=widths, z_style=z)
+            z_struct = INF.encode_style(struct_encoder, X_list)  
+            out_dec = struct_decoder(s_vec, widths=widths, z_style=z_struct)
             A_logits = out_dec[0] if isinstance(out_dec, (tuple, list)) else (out_dec["A_logits"] if isinstance(out_dec, dict) else out_dec)
 
             prob, valid_mask = INF.logits_to_prob_and_mask(A_logits, temperature=float(best_temp))
@@ -558,10 +656,12 @@ def main() -> None:
                 continue
 
             A_np = A.detach().cpu().numpy() if isinstance(A, torch.Tensor) else np.asarray(A, dtype=np.float32)
+
+            z_time = INF.encode_style(time_encoder, X_list)
             lp_raw = predict_lp_raw_only(
                 A=A_np,
                 widths=[int(w) for w in widths],
-                z_style=z,
+                z_style=z_time,
                 time_head=time_head,
                 lp_bins=int(args.lp_bins),
             )
@@ -575,21 +675,6 @@ def main() -> None:
             lp_arr = np.asarray(lp_list, dtype=np.float32)
             lp_min_bucket = float(np.quantile(lp_arr, lp_q))
             print(f"[LP-CALIB] n={len(lp_list)} q={lp_q:.2f} lp_min_bucket={lp_min_bucket:.2f} p50={float(np.quantile(lp_arr,0.5)):.2f} p90={float(np.quantile(lp_arr,0.9)):.2f} max={float(lp_arr.max()):.2f}")
-       
-
-        best_temp = calib.get("best_temp", None)
-        if best_temp is None:
-            print("[SKIP] calibration returned no best_temp")
-            continue
-
-        if str(args.pick) == "thr":
-            best_thr = float(calib.get("best_thr", args.thr_list[0]))
-            best_topk_scale = 1.0
-            print(f"[CALIB] pick=thr best_temp={best_temp:.3f} best_thr={best_thr:.4f} best_valid_rate={calib.get('best_valid_rate',0):.3f} dens_err={calib.get('best_dens_mean_abs_err',0):.4f}")
-        else:
-            best_thr = 0.0
-            best_topk_scale = float(calib.get("best_topk_scale", args.thr_list[0]))
-            print(f"[CALIB] pick=topk best_temp={best_temp:.3f} best_topk_scale={best_topk_scale:.3f} best_valid_rate={calib.get('best_valid_rate',0):.3f} dens_err={calib.get('best_dens_mean_abs_err',0):.4f}")
 
         rng = random.Random(int(args.seed) + 9999 * bi)
         valid = 0
@@ -620,9 +705,9 @@ def main() -> None:
             A_tgt = INF.graph_to_adj_target(Gt, node_order).to(DEVICE)
 
             X_list = INF.sample_k_support(bucket_to_idx, files, bi, int(args.k_shot), rng, exclude=tidx)
-            z = INF.encode_style(encoder, X_list)  # [1,d]
+            z_struct = INF.encode_style(struct_encoder, X_list)
 
-            out_dec = decoder(s_vec, widths=widths, z_style=z)
+            out_dec = struct_decoder(s_vec, widths=widths, z_style=z_struct)
             A_logits = out_dec[0] if isinstance(out_dec, (tuple, list)) else (out_dec["A_logits"] if isinstance(out_dec, dict) else out_dec)
 
             prob, valid_mask = INF.logits_to_prob_and_mask(A_logits, temperature=float(best_temp))
@@ -659,22 +744,22 @@ def main() -> None:
                 invalid_reasons["has_isolated"] += int(rs.get("has_isolated", 0))
                 continue
 
-            if isinstance(A, torch.Tensor):
-                A_np = A.detach().cpu().numpy()
-            else:
-                A_np = np.asarray(A, dtype=np.float32)
+            A_np = A.detach().cpu().numpy() if isinstance(A, torch.Tensor) else np.asarray(A, dtype=np.float32)
+
+           
+            z_time = INF.encode_style(time_encoder, X_list)
 
             attach_time_labels(
                 G=Ggen_struct,
                 A=A_np,
                 widths=[int(w) for w in widths],
-                z_style=z,
+                z_style=z_time,
                 time_head=time_head,
                 lp_bins=int(args.lp_bins),
                 label_key=str(args.label_key),
                 integerize=int(args.integerize),
                 tmax_longest_path=float(args.tmax),
-                lp_min = float(lp_min_bucket)
+                lp_min=float(lp_min_bucket),
             )
 
             valid += 1
@@ -690,4 +775,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
