@@ -107,7 +107,7 @@ class StructureToGraphDecoder5(nn.Module):
         self.max_rank = max_rank
 
         self.rank_emb = nn.Embedding(max_rank + 1, d_model)
-        self.pos_emb = nn.Embedding(512, d_model)   safe upper bound
+        self.pos_emb = nn.Embedding(512, d_model)   #safe upper bound
 
         self.style_proj = nn.Linear(d_style, d_model)
 
