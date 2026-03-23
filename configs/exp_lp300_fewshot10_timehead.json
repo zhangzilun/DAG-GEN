@@ -1,5 +1,5 @@
 {
-  "data_dir": "../src/gpickle2_lp300",   
+  "data_dir": "gpickle2_lp300",   
   "ckpt_struct": "checkpoints/fewshot_best.pt",
   "ckpt_time": "checkpoints/fewshot_time_best.pt",
   "k_shot": 10,
