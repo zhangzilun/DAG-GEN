@@ -15,7 +15,7 @@ This repository contains the implementation of **dag-gen-gnn**, a workflow DAG g
 - `src/`: core source code
 - `configs/`: experiment configuration files
 - `gpickle2/`: original workflow DAG dataset
-- `gpickle2_ip300/`: workflow DAG dataset with LP budget 300
+- `gpickle2_lp300/`: workflow DAG dataset with LP budget 300
 - `test10/`: few-shot reference DAGs
 - `checkpoints/`: saved model weights
 
@@ -38,7 +38,7 @@ Install dependencies:
 The project uses `.gpickle` workflow DAG datasets.
 
 - `gpickle2/`: original DAG dataset
-- `gpickle2_ip300/`: DAG dataset with critical-path budget 300
+- `gpickle2_lp300/`: DAG dataset with critical-path budget 300
 - `test10/`: few-shot reference DAGs for testing
 
 ## Main Scripts
