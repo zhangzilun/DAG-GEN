@@ -1,6 +1,6 @@
 # dag-gen-gnn
 
-A constraint-aware workflow DAG generator with few-shot guidance for real-time scheduling evaluation.
+A Constraint-aware DAG Taskset Generator with Few-shot Guidance for Real-Time Scheduling Evaluation
 
 ## Overview
 
