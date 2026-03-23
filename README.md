@@ -33,7 +33,7 @@ Install dependencies:
 
 `pip install -r requirements.txt`
 
-## 
+## Data
 
 The project uses `.gpickle` workflow DAG datasets.
 
